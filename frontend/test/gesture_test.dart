@@ -13,10 +13,14 @@ void main() {
     final hiddenZone = find.byKey(const Key('hidden-settings-zone'));
     expect(hiddenZone, findsOneWidget);
 
-    await tester.tap(hiddenZone);
-    await tester.tap(hiddenZone);
-    await tester.tap(hiddenZone);
-    await tester.pump(const Duration(milliseconds: 1100));
+    // Three quick taps in the hidden zone should open the settings dialog.
+    await tester.tap(hiddenZone, warnIfMissed: false);
+    await tester.pump();
+    await tester.tap(hiddenZone, warnIfMissed: false);
+    await tester.pump();
+    await tester.tap(hiddenZone, warnIfMissed: false);
+    // Allow animations and dialog presentation to settle.
+    await tester.pumpAndSettle();
 
     expect(find.text('Server IP'), findsOneWidget);
   });
