@@ -25,6 +25,18 @@ jobs:
           pkg-config --list-all | grep -E 'gdk|gtk|pango|glib' || true
           echo 'pkgconfig dir listing:'
           ls -la /usr/lib/x86_64-linux-gnu/pkgconfig || true
+      - name: Extra backend debug
+        if: runner.os == 'Linux'
+        run: |
+          echo 'PKG_CONFIG_PATH='$PKG_CONFIG_PATH
+          echo 'pkg-config pc_path:'
+          pkg-config --variable pc_path pkg-config || true
+          echo 'pkg-config cflags/libs for gdk-3.0 pango glib-2.0:'
+          pkg-config --cflags --libs gdk-3.0 pango glib-2.0 || true
+          echo 'dpkg listing for libgtk-3-dev (head):'
+          dpkg -L libgtk-3-dev | head -n 50 || true
+          echo 'env snapshot:'
+          env | sort
       - name: Run backend tests
         run: cargo test --manifest-path backend/Cargo.toml
 
