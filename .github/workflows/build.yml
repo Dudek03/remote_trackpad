@@ -1,0 +1,100 @@
+name: build-and-test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run backend tests
+        run: cargo test --manifest-path backend/Cargo.toml
+
+  backend-build:
+    needs: backend-test
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build backend binary
+        run: cargo build --release --manifest-path backend/Cargo.toml
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp backend/target/release/remote-trackpad-backend.exe artifacts/remote-trackpad-backend.exe
+          else
+            cp backend/target/release/remote-trackpad-backend artifacts/remote-trackpad-backend
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-${{ matrix.os }}
+          path: artifacts/
+
+  frontend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Install Flutter dependencies
+        run: |
+          cd frontend
+          flutter pub get
+      - name: Run Flutter tests
+        run: |
+          cd frontend
+          flutter test
+
+  frontend-build-android:
+    needs: frontend-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Build Android APK
+        run: |
+          cd frontend
+          flutter pub get
+          flutter build apk --release
+      - name: Stage Android artifact
+        run: |
+          mkdir -p artifacts
+          cp frontend/build/app/outputs/flutter-apk/app-release.apk artifacts/remote-trackpad-client.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: artifacts/
+
+  frontend-build-ios:
+    needs: frontend-test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Build iOS archive
+        run: |
+          cd frontend
+          flutter pub get
+          flutter build ipa --release --no-codesign
+      - name: Stage iOS artifact
+        run: |
+          mkdir -p artifacts
+          cp frontend/build/ios/ipa/Runner.ipa artifacts/remote-trackpad-client.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: artifacts/

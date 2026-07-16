@@ -1,0 +1,39 @@
+# Root ignore file for Remote Trackpad monorepo
+
+# Rust build artifacts
+/backend/target/
+**/target/
+Cargo.lock
+
+# Flutter build and tool files
+/frontend/.dart_tool/
+/frontend/build/
+/frontend/.flutter-plugins
+/frontend/.flutter-plugins-dependencies
+/frontend/.packages
+/frontend/.idea/
+/frontend/.vscode/
+/frontend/*.iml
+
+# Flutter Xcode and Android build artifacts
+/frontend/ios/Pods/
+/frontend/ios/Flutter/Flutter.framework/
+/frontend/ios/Flutter/Flutter.podspec
+/frontend/ios/Runner.xcworkspace/
+/frontend/ios/Runner/GeneratedPluginRegistrant.*
+/frontend/ios/Runner.xcconfig
+/frontend/android/.gradle/
+/frontend/android/app/build/
+
+# OS files
+.DS_Store
+Thumbs.db
+*.log
+
+# Artifact outputs (CI outputs into artifacts/)
+/artifacts/*
+
+# Generated files
+*.lock
+*.tmp
+*.swp
