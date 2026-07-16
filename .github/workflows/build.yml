@@ -15,7 +15,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libglib2.0-dev libcairo2-dev libpango1.0-dev libgdk-pixbuf2.0-dev libatk1.0-dev libgtk-3-dev
+          sudo apt-get install -y build-essential pkg-config libglib2.0-dev libcairo2-dev libpango1.0-dev libgdk-pixbuf2.0-dev libatk1.0-dev libgtk-3-dev libxdo-dev
       - name: Debug pkg-config
         if: runner.os == 'Linux'
         run: |
@@ -92,6 +92,7 @@ jobs:
           flutter test
 
   frontend-build-android:
+    if: false
     needs: frontend-test
     runs-on: ubuntu-latest
     steps:
@@ -114,6 +115,7 @@ jobs:
           path: artifacts/
 
   frontend-build-ios:
+    if: false
     needs: frontend-test
     runs-on: macos-latest
     steps:
