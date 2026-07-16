@@ -91,7 +91,6 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
                 controller: controller,
                 decoration: const InputDecoration(hintText: 'e.g. 192.168.1.10'),
                 keyboardType: TextInputType.number,
-                autofillHints: const [AutofillHints.ip],
               ),
             ],
           ),
