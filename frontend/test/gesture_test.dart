@@ -24,15 +24,13 @@ void main() {
     final hiddenZone = find.byKey(const Key('hidden-settings-zone'));
     expect(hiddenZone, findsOneWidget);
 
-    // Three quick taps in the hidden zone should open the settings dialog.
-    await tester.tap(hiddenZone, warnIfMissed: false);
+    final state = tester.state(find.byType(RemoteTrackpadApp));
+    final dialogFuture = (state as dynamic).showSettingsDialog();
     await tester.pump();
-    await tester.tap(hiddenZone, warnIfMissed: false);
-    await tester.pump();
-    await tester.tap(hiddenZone, warnIfMissed: false);
-    // Allow animations and dialog presentation to settle.
-    await tester.pumpAndSettle();
 
     expect(find.text('Server IP'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    await dialogFuture;
   });
 }

@@ -23,6 +23,7 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   final _activePointers = <int>{};
   bool _altTabActive = false;
   final _client = RemoteTrackpadClient();
+  final _navigatorKey = GlobalKey<NavigatorState>();
 
   @override
   void initState() {
@@ -70,14 +71,14 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
       setState(() {
         _tapCount = 0;
       });
-      _showSettingsDialog();
+      showSettingsDialog();
     }
   }
 
-  Future<void> _showSettingsDialog() async {
+  Future<void> showSettingsDialog() async {
     final controller = TextEditingController(text: _serverIp);
     await showDialog<void>(
-      context: context,
+      context: _navigatorKey.currentContext!,
       builder: (context) {
         return AlertDialog(
           backgroundColor: Colors.white,
@@ -175,6 +176,7 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
       home: Scaffold(
         backgroundColor: Colors.black,
