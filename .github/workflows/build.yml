@@ -125,6 +125,27 @@ jobs:
           channel: stable
       - name: Build iOS archive
         run: |
+      backend-build:
+        needs: backend-test
+        strategy:
+          matrix:
+            os: [windows-latest]
+        runs-on: ${{ matrix.os }}
+        steps:
+          - uses: actions/checkout@v4
+          - uses: dtolnay/rust-toolchain@stable
+          - name: Build backend binary
+            run: cargo build --release --manifest-path backend/Cargo.toml
+          - name: Stage artifacts
+            shell: bash
+            run: |
+              mkdir -p artifacts
+              if [ "$RUNNER_OS" = "Windows" ]; then
+                cp backend/target/release/remote-trackpad-backend.exe artifacts/remote-trackpad-backend.exe
+              else
+                cp backend/target/release/remote-trackpad-backend artifacts/remote-trackpad-backend
+              fi
+
           cd frontend
           flutter pub get
           flutter build ipa --release --no-codesign
