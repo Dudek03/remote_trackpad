@@ -16,17 +16,25 @@ class SocketTransport implements Transport {
   @override
   Future<void> sendUdp(String data) async {
     final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-    socket.send(Uint8List.fromList(data.codeUnits), InternetAddress(serverIp), udpPort);
+    socket.send(
+        Uint8List.fromList(data.codeUnits), InternetAddress(serverIp), udpPort);
     socket.close();
   }
 
   @override
   Future<void> sendTcp(String data) async {
-    final socket = await Socket.connect(serverIp, tcpPort, timeout: const Duration(seconds: 2));
+    final socket = await Socket.connect(serverIp, tcpPort,
+        timeout: const Duration(seconds: 2));
     socket.add(data.codeUnits);
     await socket.flush();
     await socket.close();
   }
+}
+
+Transport createTransport(String serverIp, Transport? transport) {
+  if (transport != null) return transport;
+  if (serverIp.isEmpty) throw StateError('Server IP is not set');
+  return SocketTransport(serverIp);
 }
 
 class RemoteTrackpadClient {
@@ -34,9 +42,7 @@ class RemoteTrackpadClient {
   Transport? transport;
 
   Transport get _transport {
-    if (transport != null) return transport!;
-    if (serverIp.isEmpty) throw StateError('Server IP is not set');
-    return SocketTransport(serverIp);
+    return createTransport(serverIp, transport);
   }
 
   Future<void> sendUdpMove(double dx, double dy) async {

@@ -1,8 +1,11 @@
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 use eframe::{egui, NativeOptions};
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use local_ip_address::local_ip;
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -25,8 +28,57 @@ pub fn get_local_ip() -> String {
     local_ip().map(|ip| ip.to_string()).unwrap_or_else(|_| "127.0.0.1".to_string())
 }
 
+pub fn parse_config_inputs(
+    udp_port_input: &str,
+    tcp_port_input: &str,
+    sensitivity_input: &str,
+) -> Option<(u16, u16, f32)> {
+    let udp_port = udp_port_input.parse::<u16>().ok()?;
+    let tcp_port = tcp_port_input.parse::<u16>().ok()?;
+    let sensitivity = sanitize_sensitivity(sensitivity_input.parse::<f32>().ok()?);
+    Some((udp_port, tcp_port, sensitivity))
+}
+
+pub fn is_tray_click(event: &TrayIconEvent) -> bool {
+    matches!(event, TrayIconEvent::Click { .. })
+}
+
+pub fn sanitize_sensitivity(sensitivity: f32) -> f32 {
+    sensitivity.clamp(0.1, 10.0)
+}
+
+pub fn apply_server_config(
+    config: &Arc<Mutex<ServerConfig>>,
+    udp_port_input: &str,
+    tcp_port_input: &str,
+    sensitivity_input: &str,
+) -> bool {
+    let Some((udp_port, tcp_port, sensitivity)) = parse_config_inputs(
+        udp_port_input,
+        tcp_port_input,
+        sensitivity_input,
+    ) else {
+        return false;
+    };
+
+    let mut cfg = config.lock().unwrap();
+    cfg.udp_port = udp_port;
+    cfg.tcp_port = tcp_port;
+    cfg.sensitivity = sensitivity;
+    true
+}
+
+fn set_window_visibility(ctx: &egui::Context, visible: bool) {
+    let command = if visible {
+        egui::ViewportCommand::Visible(true)
+    } else {
+        egui::ViewportCommand::Visible(false)
+    };
+    ctx.send_viewport_cmd(command);
+}
+
 pub fn run_ui(config: Arc<Mutex<ServerConfig>>, local_ip: String) -> anyhow::Result<()> {
-    let show_window = Arc::new(AtomicBool::new(true));
+    let show_window = Arc::new(AtomicBool::new(false));
     let tray_open_flag = Arc::clone(&show_window);
 
     let icon = Icon::from_rgba(vec![0u8, 0, 0, 255].repeat(16 * 16), 16, 16)
@@ -38,7 +90,7 @@ pub fn run_ui(config: Arc<Mutex<ServerConfig>>, local_ip: String) -> anyhow::Res
         .map_err(|err| anyhow::anyhow!("tray icon build failed: {err}"))?;
 
     TrayIconEvent::set_event_handler(Some(move |event| {
-        if matches!(event, TrayIconEvent::Click { .. }) {
+        if is_tray_click(&event) {
             tray_open_flag.store(true, Ordering::SeqCst);
         }
     }));
@@ -57,6 +109,7 @@ struct RemoteTrackpadApp {
     config: Arc<Mutex<ServerConfig>>,
     local_ip: String,
     show_window: Arc<AtomicBool>,
+    #[allow(dead_code)]
     tray_icon: TrayIcon,
     udp_port_input: String,
     tcp_port_input: String,
@@ -92,6 +145,9 @@ impl RemoteTrackpadApp {
 
 impl eframe::App for RemoteTrackpadApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let window_visible = self.show_window.load(Ordering::SeqCst);
+        set_window_visibility(ctx, window_visible);
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.add_space(8.0);
             ui.heading("Remote Trackpad Server");
@@ -99,8 +155,8 @@ impl eframe::App for RemoteTrackpadApp {
             ui.label("Connect the mobile app to the local IP shown above.");
             ui.separator();
 
-            if self.show_window.load(Ordering::SeqCst) {
-                ui.label("System tray icon is active. Click the tray icon to reopen this window.");
+            if window_visible {
+                ui.label("System tray icon is active. Clicking the tray icon brings this window back when needed.");
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label("UDP Port:");
@@ -116,15 +172,12 @@ impl eframe::App for RemoteTrackpadApp {
                 });
                 ui.add_space(8.0);
                 if ui.button("Apply Settings").clicked() {
-                    if let (Ok(udp_port), Ok(tcp_port), Ok(sensitivity)) = (
-                        self.udp_port_input.parse::<u16>(),
-                        self.tcp_port_input.parse::<u16>(),
-                        self.sensitivity_input.parse::<f32>(),
+                    if apply_server_config(
+                        &self.config,
+                        &self.udp_port_input,
+                        &self.tcp_port_input,
+                        &self.sensitivity_input,
                     ) {
-                        let mut cfg = self.config.lock().unwrap();
-                        cfg.udp_port = udp_port;
-                        cfg.tcp_port = tcp_port;
-                        cfg.sensitivity = sensitivity.clamp(0.1, 10.0);
                         self.restart_required = true;
                     }
                 }
@@ -136,11 +189,38 @@ impl eframe::App for RemoteTrackpadApp {
                     self.show_window.store(false, Ordering::SeqCst);
                 }
             } else {
-                ui.label("Tray icon clicked. Open the tray icon again to show the settings window.");
-                if ui.button("Show Window").clicked() {
-                    self.show_window.store(true, Ordering::SeqCst);
-                }
+                ui.label("The settings UI stays hidden until you click the tray icon.");
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_config_inputs_with_sanitized_sensitivity() {
+        let parsed = parse_config_inputs("8001", "8002", "1.25").unwrap();
+        assert_eq!(parsed, (8001, 8002, 1.25));
+    }
+
+    #[test]
+    fn clamps_sensitivity_to_the_supported_range() {
+        assert_eq!(sanitize_sensitivity(0.0), 0.1);
+        assert_eq!(sanitize_sensitivity(20.0), 10.0);
+        assert_eq!(sanitize_sensitivity(2.0), 2.0);
+    }
+
+    #[test]
+    fn applies_server_settings_to_the_shared_config() {
+        let config = Arc::new(Mutex::new(ServerConfig::default()));
+        let applied = apply_server_config(&config, "9001", "9002", "3.5");
+
+        assert!(applied);
+        let cfg = config.lock().unwrap();
+        assert_eq!(cfg.udp_port, 9001);
+        assert_eq!(cfg.tcp_port, 9002);
+        assert_eq!(cfg.sensitivity, 3.5);
     }
 }

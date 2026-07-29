@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,6 +6,13 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'network.dart';
 import 'protocol.dart';
+
+const int hiddenSettingsTapThreshold = 3;
+const Duration hiddenSettingsTapResetDuration = Duration(milliseconds: 1000);
+
+int advanceTapCount(int tapCount) => tapCount + 1;
+
+bool shouldOpenSettings(int tapCount, int threshold) => tapCount >= threshold;
 
 class RemoteTrackpadApp extends StatefulWidget {
   const RemoteTrackpadApp({super.key});
@@ -58,15 +63,16 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   }
 
   void _handleHiddenZoneTap() {
-    _tapCount += 1;
+    final nextTapCount = advanceTapCount(_tapCount);
+    _tapCount = nextTapCount;
     _tapResetTimer?.cancel();
-    _tapResetTimer = Timer(const Duration(milliseconds: 1000), () {
+    _tapResetTimer = Timer(hiddenSettingsTapResetDuration, () {
       setState(() {
         _tapCount = 0;
       });
     });
 
-    if (_tapCount >= 3) {
+    if (shouldOpenSettings(_tapCount, hiddenSettingsTapThreshold)) {
       _tapResetTimer?.cancel();
       setState(() {
         _tapCount = 0;
@@ -77,8 +83,11 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
 
   Future<void> showSettingsDialog() async {
     final controller = TextEditingController(text: _serverIp);
+    final dialogContext = _navigatorKey.currentContext;
+    if (dialogContext == null) return;
+
     await showDialog<void>(
-      context: _navigatorKey.currentContext!,
+      context: dialogContext,
       builder: (context) {
         return AlertDialog(
           backgroundColor: Colors.white,
@@ -90,7 +99,8 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
               const SizedBox(height: 12),
               TextField(
                 controller: controller,
-                decoration: const InputDecoration(hintText: 'e.g. 192.168.1.10'),
+                decoration:
+                    const InputDecoration(hintText: 'e.g. 192.168.1.10'),
                 keyboardType: TextInputType.number,
               ),
             ],
@@ -193,17 +203,30 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
               children: [
                 Center(
                   child: Text(
-                    _serverIp.isEmpty ? 'Connect to a server' : 'Connected to $_serverIp',
+                    _serverIp.isEmpty
+                        ? 'Connect to a server'
+                        : 'Connected to $_serverIp',
                     style: const TextStyle(color: Colors.white),
                   ),
                 ),
                 Positioned(
                   right: 0,
                   bottom: 0,
-                  child: GestureDetector(
-                    key: const Key('hidden-settings-zone'),
-                    onTap: _handleHiddenZoneTap,
-                    child: const SizedBox(width: 90, height: 90),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: FilledButton(
+                      key: const Key('hidden-settings-zone'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: Colors.black87,
+                        minimumSize: const Size(96, 48),
+                      ),
+                      onPressed: _handleHiddenZoneTap,
+                      child: const Text(
+                        'Settings',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
                   ),
                 ),
               ],
