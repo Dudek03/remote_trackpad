@@ -4,15 +4,24 @@ use tokio::{io::AsyncReadExt, net::{TcpListener, UdpSocket}, time::sleep};
 
 use crate::{controller::{AppController, EnigoDevice}, ui::ServerConfig};
 
-pub async fn run_server(config: Arc<Mutex<ServerConfig>>) -> anyhow::Result<()> {
-    let config_lock = config.lock().unwrap();
-    let udp_socket = UdpSocket::bind(("0.0.0.0", config_lock.udp_port)).await?;
-    let tcp_listener = TcpListener::bind(("0.0.0.0", config_lock.tcp_port)).await?;
-    drop(config_lock);
+pub async fn run_server(
+    config: Arc<Mutex<ServerConfig>>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    let (udp_port, tcp_port) = {
+        let config_lock = config.lock().unwrap();
+        (config_lock.udp_port, config_lock.tcp_port)
+    };
 
-    let controller = Arc::new(Mutex::new(AppController::new(EnigoDevice::default())));
-    let udp_controller = controller.clone();
+    let udp_socket = UdpSocket::bind(("0.0.0.0", udp_port)).await?;
+    let tcp_listener = TcpListener::bind(("0.0.0.0", tcp_port)).await?;
 
+    let controller = Arc::new(Mutex::new(AppController::with_config(
+        EnigoDevice::default(),
+        Arc::clone(&config),
+    )));
+
+    let udp_controller = Arc::clone(&controller);
     tokio::spawn(async move {
         let mut buf = [0u8; 1024];
         loop {
@@ -28,15 +37,30 @@ pub async fn run_server(config: Arc<Mutex<ServerConfig>>) -> anyhow::Result<()> 
         }
     });
 
-    let tcp_controller = controller.clone();
+    let tcp_controller = Arc::clone(&controller);
     tokio::spawn(async move {
         loop {
             match tcp_listener.accept().await {
                 Ok((mut stream, _)) => {
-                    let mut buf = [0u8; 1024];
-                    if let Ok(len) = stream.read(&mut buf).await {
-                        let _ = tcp_controller.lock().unwrap().handle_tcp_payload(&buf[..len]);
-                    }
+                    let ctrl = Arc::clone(&tcp_controller);
+                    tokio::spawn(async move {
+                        let mut buf = [0u8; 1024];
+                        while let Ok(len) = stream.read(&mut buf).await {
+                            if len == 0 {
+                                break;
+                            }
+                            let text = match std::str::from_utf8(&buf[..len]) {
+                                Ok(t) => t,
+                                Err(_) => continue,
+                            };
+                            for line in text.lines() {
+                                let trimmed = line.trim();
+                                if !trimmed.is_empty() {
+                                    let _ = ctrl.lock().unwrap().handle_tcp_payload(trimmed.as_bytes());
+                                }
+                            }
+                        }
+                    });
                 }
                 Err(err) => {
                     eprintln!("tcp error: {err}");
@@ -46,6 +70,9 @@ pub async fn run_server(config: Arc<Mutex<ServerConfig>>) -> anyhow::Result<()> 
         }
     });
 
-    tokio::signal::ctrl_c().await?;
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {},
+        _ = shutdown_rx.wait_for(|&s| s) => {},
+    }
     Ok(())
 }

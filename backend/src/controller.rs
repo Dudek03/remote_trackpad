@@ -1,4 +1,7 @@
+use std::sync::{Arc, Mutex};
+
 use crate::protocol::{parse_tcp_payload, parse_udp_payload, TcpCommand, UdpPacket};
+use crate::ui::ServerConfig;
 use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse};
 
 pub trait InputDevice {
@@ -79,6 +82,9 @@ impl InputDevice for EnigoDevice {
 pub struct AppController<T: InputDevice> {
     device: T,
     alt_tab_active: bool,
+    config: Option<Arc<Mutex<ServerConfig>>>,
+    accum_dx: f32,
+    accum_dy: f32,
 }
 
 impl<T: InputDevice> AppController<T> {
@@ -86,12 +92,44 @@ impl<T: InputDevice> AppController<T> {
         Self {
             device,
             alt_tab_active: false,
+            config: None,
+            accum_dx: 0.0,
+            accum_dy: 0.0,
+        }
+    }
+
+    pub fn with_config(device: T, config: Arc<Mutex<ServerConfig>>) -> Self {
+        Self {
+            device,
+            alt_tab_active: false,
+            config: Some(config),
+            accum_dx: 0.0,
+            accum_dy: 0.0,
         }
     }
 
     pub fn handle_udp_payload(&mut self, payload: &[u8]) -> anyhow::Result<()> {
+        let sensitivity = self
+            .config
+            .as_ref()
+            .and_then(|c| c.lock().ok())
+            .map(|c| c.sensitivity)
+            .unwrap_or(1.0);
+
         match parse_udp_payload(payload)? {
-            UdpPacket::Move { dx, dy } => self.device.move_cursor(dx, dy),
+            UdpPacket::Move { dx, dy } => {
+                self.accum_dx += dx * sensitivity;
+                self.accum_dy += dy * sensitivity;
+
+                let move_x = self.accum_dx.trunc();
+                let move_y = self.accum_dy.trunc();
+
+                if move_x.abs() >= 1.0 || move_y.abs() >= 1.0 {
+                    self.device.move_cursor(move_x, move_y);
+                    self.accum_dx -= move_x;
+                    self.accum_dy -= move_y;
+                }
+            }
             UdpPacket::Scroll { dx, dy } => self.device.scroll(dx, dy),
         }
         Ok(())

@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -35,6 +33,7 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   @override
   void dispose() {
     _tapResetTimer?.cancel();
+    _client.dispose();
     super.dispose();
   }
 
@@ -43,7 +42,6 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
     setState(() {
       _serverIp = prefs.getString('server_ip') ?? '';
       _client.serverIp = _serverIp;
-      _client.transport = null;
     });
   }
 
@@ -53,7 +51,6 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
     setState(() {
       _serverIp = value;
       _client.serverIp = value;
-      _client.transport = null;
     });
   }
 
@@ -61,9 +58,11 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
     _tapCount += 1;
     _tapResetTimer?.cancel();
     _tapResetTimer = Timer(const Duration(milliseconds: 1000), () {
-      setState(() {
-        _tapCount = 0;
-      });
+      if (mounted) {
+        setState(() {
+          _tapCount = 0;
+        });
+      }
     });
 
     if (_tapCount >= 3) {
@@ -76,9 +75,11 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   }
 
   Future<void> showSettingsDialog() async {
+    final context = _navigatorKey.currentContext;
+    if (context == null) return;
     final controller = TextEditingController(text: _serverIp);
     await showDialog<void>(
-      context: _navigatorKey.currentContext!,
+      context: context,
       builder: (context) {
         return AlertDialog(
           backgroundColor: Colors.white,
@@ -90,7 +91,8 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
               const SizedBox(height: 12),
               TextField(
                 controller: controller,
-                decoration: const InputDecoration(hintText: 'e.g. 192.168.1.10'),
+                decoration:
+                    const InputDecoration(hintText: 'e.g. 192.168.1.10'),
                 keyboardType: TextInputType.number,
               ),
             ],
@@ -140,8 +142,10 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
     if (count == 1) {
       _sendUdpMove(event.delta.dx, event.delta.dy);
     } else if (count == 2) {
-      if (event.delta.dy.abs() >= 1.0) {
-        _sendUdpScroll(0, event.delta.dy);
+      if (_activePointers.isNotEmpty && event.pointer == _activePointers.first) {
+        if (event.delta.dy.abs() >= 0.5) {
+          _sendUdpScroll(0, event.delta.dy);
+        }
       }
     } else if (count == 3) {
       if (!_altTabActive && event.delta.dx.abs() > 8.0) {
@@ -149,10 +153,12 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
         _sendTcpCommand(TcpCommand.altTabStart);
       }
     } else if (count == 4) {
-      if (event.delta.dy <= -8.0) {
-        _sendTcpCommand(TcpCommand.volumeUp);
-      } else if (event.delta.dy >= 8.0) {
-        _sendTcpCommand(TcpCommand.volumeDown);
+      if (_activePointers.isNotEmpty && event.pointer == _activePointers.first) {
+        if (event.delta.dy <= -8.0) {
+          _sendTcpCommand(TcpCommand.volumeUp);
+        } else if (event.delta.dy >= 8.0) {
+          _sendTcpCommand(TcpCommand.volumeDown);
+        }
       }
     }
   }
@@ -185,29 +191,38 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
           onPointerMove: _onPointerMove,
           onPointerUp: _onPointerUp,
           onPointerCancel: _onPointerCancel,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => _sendTcpCommand(TcpCommand.leftClick),
-            onDoubleTap: () => _sendTcpCommand(TcpCommand.rightClick),
-            child: Stack(
-              children: [
-                Center(
-                  child: Text(
-                    _serverIp.isEmpty ? 'Connect to a server' : 'Connected to $_serverIp',
-                    style: const TextStyle(color: Colors.white),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _sendTcpCommand(TcpCommand.leftClick),
+                  onDoubleTap: () => _sendTcpCommand(TcpCommand.rightClick),
+                  child: Center(
+                    child: Text(
+                      _serverIp.isEmpty
+                          ? 'Connect to a server'
+                          : 'Connected to $_serverIp',
+                      style: const TextStyle(color: Colors.white),
+                    ),
                   ),
                 ),
-                Positioned(
-                  right: 0,
-                  bottom: 0,
-                  child: GestureDetector(
-                    key: const Key('hidden-settings-zone'),
-                    onTap: _handleHiddenZoneTap,
-                    child: const SizedBox(width: 90, height: 90),
+              ),
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: GestureDetector(
+                  key: const Key('hidden-settings-zone'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _handleHiddenZoneTap,
+                  child: Container(
+                    width: 90,
+                    height: 90,
+                    color: Colors.transparent,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
