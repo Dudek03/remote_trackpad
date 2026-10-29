@@ -14,6 +14,33 @@ int advanceTapCount(int tapCount) => tapCount + 1;
 
 bool shouldOpenSettings(int tapCount, int threshold) => tapCount >= threshold;
 
+bool isHorizontalSwipe(double dx, double dy) => dx.abs() >= dy.abs();
+
+TcpCommand getThreeFingerHorizontalCommand(double dx) =>
+    dx > 0 ? TcpCommand.altTabNext : TcpCommand.altTabPrev;
+
+TcpCommand getThreeFingerVerticalCommand(double dy) =>
+    dy <= 0 ? TcpCommand.volumeUp : TcpCommand.volumeDown;
+
+TcpCommand getFourFingerVerticalCommand(double dy, String action) {
+  if (action == 'show_desktop') {
+    return TcpCommand.showDesktop;
+  }
+  return dy > 0 ? TcpCommand.windowMinimize : TcpCommand.windowMaximize;
+}
+
+TcpCommand getFourFingerHorizontalCommand(bool isRight, String action) {
+  switch (action) {
+    case 'media':
+      return isRight ? TcpCommand.mediaNext : TcpCommand.mediaPrev;
+    case 'browser':
+      return isRight ? TcpCommand.browserForward : TcpCommand.browserBack;
+    case 'virtual_desktops':
+    default:
+      return isRight ? TcpCommand.desktopRight : TcpCommand.desktopLeft;
+  }
+}
+
 class RemoteTrackpadApp extends StatefulWidget {
   const RemoteTrackpadApp({super.key});
 
@@ -23,17 +50,26 @@ class RemoteTrackpadApp extends StatefulWidget {
 
 class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   String _serverIp = '';
+  String _fourFingerHorizontalAction = 'virtual_desktops';
+  String _fourFingerVerticalAction = 'minimize_active';
   int _tapCount = 0;
   Timer? _tapResetTimer;
   final _activePointers = <int>{};
   bool _altTabActive = false;
+  bool _threeFingerGestureLocked = false;
+  bool _threeFingerIsHorizontal = false;
+  double _threeFingerDeltaX = 0.0;
+  double _threeFingerDeltaY = 0.0;
+  bool _fourFingerTriggered = false;
+  double _fourFingerDeltaX = 0.0;
+  double _fourFingerDeltaY = 0.0;
   final _client = RemoteTrackpadClient();
   final _navigatorKey = GlobalKey<NavigatorState>();
 
   @override
   void initState() {
     super.initState();
-    _loadServerIp();
+    _loadSettings();
     WakelockPlus.enable();
   }
 
@@ -44,22 +80,40 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
     super.dispose();
   }
 
-  Future<void> _loadServerIp() async {
+  Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _serverIp = prefs.getString('server_ip') ?? '';
+      _fourFingerHorizontalAction =
+          prefs.getString('four_finger_horizontal') ?? 'virtual_desktops';
+      _fourFingerVerticalAction =
+          prefs.getString('four_finger_vertical') ?? 'minimize_active';
       _client.serverIp = _serverIp;
     });
   }
 
-  Future<void> _saveServerIp(String value) async {
+  Future<void> _saveSettings({
+    required String ip,
+    required String fourFingerHorizontal,
+    required String fourFingerVertical,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('server_ip', value);
+    await prefs.setString('server_ip', ip);
+    await prefs.setString('four_finger_horizontal', fourFingerHorizontal);
+    await prefs.setString('four_finger_vertical', fourFingerVertical);
     setState(() {
-      _serverIp = value;
-      _client.serverIp = value;
+      _serverIp = ip;
+      _fourFingerHorizontalAction = fourFingerHorizontal;
+      _fourFingerVerticalAction = fourFingerVertical;
+      _client.serverIp = ip;
     });
   }
+
+  Future<void> _saveServerIp(String value) => _saveSettings(
+        ip: value,
+        fourFingerHorizontal: _fourFingerHorizontalAction,
+        fourFingerVertical: _fourFingerVerticalAction,
+      );
 
   void _handleHiddenZoneTap() {
     final nextTapCount = advanceTapCount(_tapCount);
@@ -85,40 +139,108 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   Future<void> showSettingsDialog() async {
     final dialogContext = _navigatorKey.currentContext;
     if (dialogContext == null) return;
-    final controller = TextEditingController(text: _serverIp);
+    final ipController = TextEditingController(text: _serverIp);
+    String selectedHorizontal = _fourFingerHorizontalAction;
+    String selectedVertical = _fourFingerVerticalAction;
 
     await showDialog<void>(
       context: dialogContext,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: Colors.white,
-          title: const Text('Settings'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Server IP'),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                decoration:
-                    const InputDecoration(hintText: 'e.g. 192.168.1.10'),
-                keyboardType: TextInputType.number,
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: Colors.white,
+              title: const Text('Settings'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Server IP',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: ipController,
+                      decoration:
+                          const InputDecoration(hintText: 'e.g. 192.168.1.10'),
+                      keyboardType: TextInputType.number,
+                    ),
+                    const SizedBox(height: 16),
+                    const Text('Gesty 4 palcami w boki',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    DropdownButton<String>(
+                      isExpanded: true,
+                      value: selectedHorizontal,
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'virtual_desktops',
+                          child: Text('Pulpity wirtualne (Ctrl+Win+←/→)'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'media',
+                          child: Text('Muzyka (Poprzedni / Następny)'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'browser',
+                          child: Text('Przeglądarka (Wstecz / Dalej)'),
+                        ),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) {
+                          setDialogState(() {
+                            selectedHorizontal = val;
+                          });
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    const Text('Gesty 4 palcami góra/dół',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    DropdownButton<String>(
+                      isExpanded: true,
+                      value: selectedVertical,
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'minimize_active',
+                          child: Text('Minimalizuj / Maksymalizuj (Win+↓/↑)'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'show_desktop',
+                          child: Text('Pokaż pulpit (Win+D)'),
+                        ),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) {
+                          setDialogState(() {
+                            selectedVertical = val;
+                          });
+                        }
+                      },
+                    ),
+                  ],
+                ),
               ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                _saveServerIp(controller.text.trim());
-                Navigator.of(context).pop();
-              },
-              child: const Text('Save'),
-            ),
-          ],
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    _saveSettings(
+                      ip: ipController.text.trim(),
+                      fourFingerHorizontal: selectedHorizontal,
+                      fourFingerVertical: selectedVertical,
+                    );
+                    Navigator.of(context).pop();
+                  },
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -142,7 +264,14 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   void _onPointerDown(PointerDownEvent event) {
     _activePointers.add(event.pointer);
     if (_activePointers.length == 3) {
-      _altTabActive = false;
+      _threeFingerGestureLocked = false;
+      _threeFingerIsHorizontal = false;
+      _threeFingerDeltaX = 0.0;
+      _threeFingerDeltaY = 0.0;
+    } else if (_activePointers.length == 4) {
+      _fourFingerTriggered = false;
+      _fourFingerDeltaX = 0.0;
+      _fourFingerDeltaY = 0.0;
     }
   }
 
@@ -157,16 +286,69 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
         }
       }
     } else if (count == 3) {
-      if (!_altTabActive && event.delta.dx.abs() > 8.0) {
-        _altTabActive = true;
-        _sendTcpCommand(TcpCommand.altTabStart);
+      if (_activePointers.isNotEmpty && event.pointer == _activePointers.first) {
+        if (!_threeFingerGestureLocked) {
+          _threeFingerDeltaX += event.delta.dx;
+          _threeFingerDeltaY += event.delta.dy;
+
+          const threshold = 12.0;
+          if (_threeFingerDeltaX.abs() >= threshold ||
+              _threeFingerDeltaY.abs() >= threshold) {
+            _threeFingerGestureLocked = true;
+            if (isHorizontalSwipe(_threeFingerDeltaX, _threeFingerDeltaY)) {
+              _threeFingerIsHorizontal = true;
+              _altTabActive = true;
+              _sendTcpCommand(
+                  getThreeFingerHorizontalCommand(_threeFingerDeltaX));
+              _threeFingerDeltaX = 0.0;
+            } else {
+              _threeFingerIsHorizontal = false;
+              _sendTcpCommand(getThreeFingerVerticalCommand(_threeFingerDeltaY));
+              _threeFingerDeltaY = 0.0;
+            }
+          }
+        } else {
+          if (_threeFingerIsHorizontal) {
+            _threeFingerDeltaX += event.delta.dx;
+            const step = 25.0;
+            if (_threeFingerDeltaX >= step) {
+              _sendTcpCommand(TcpCommand.altTabNext);
+              _threeFingerDeltaX = 0.0;
+            } else if (_threeFingerDeltaX <= -step) {
+              _sendTcpCommand(TcpCommand.altTabPrev);
+              _threeFingerDeltaX = 0.0;
+            }
+          } else {
+            _threeFingerDeltaY += event.delta.dy;
+            const step = 15.0;
+            if (_threeFingerDeltaY <= -step) {
+              _sendTcpCommand(TcpCommand.volumeUp);
+              _threeFingerDeltaY = 0.0;
+            } else if (_threeFingerDeltaY >= step) {
+              _sendTcpCommand(TcpCommand.volumeDown);
+              _threeFingerDeltaY = 0.0;
+            }
+          }
+        }
       }
     } else if (count == 4) {
       if (_activePointers.isNotEmpty && event.pointer == _activePointers.first) {
-        if (event.delta.dy <= -8.0) {
-          _sendTcpCommand(TcpCommand.volumeUp);
-        } else if (event.delta.dy >= 8.0) {
-          _sendTcpCommand(TcpCommand.volumeDown);
+        if (!_fourFingerTriggered) {
+          _fourFingerDeltaX += event.delta.dx;
+          _fourFingerDeltaY += event.delta.dy;
+
+          const threshold = 16.0;
+          if (_fourFingerDeltaX.abs() >= threshold ||
+              _fourFingerDeltaY.abs() >= threshold) {
+            _fourFingerTriggered = true;
+            if (!isHorizontalSwipe(_fourFingerDeltaX, _fourFingerDeltaY)) {
+              _sendTcpCommand(getFourFingerVerticalCommand(
+                  _fourFingerDeltaY, _fourFingerVerticalAction));
+            } else {
+              _sendTcpCommand(getFourFingerHorizontalCommand(
+                  _fourFingerDeltaX > 0, _fourFingerHorizontalAction));
+            }
+          }
         }
       }
     }
@@ -174,17 +356,28 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
 
   void _onPointerUp(PointerUpEvent event) {
     _activePointers.remove(event.pointer);
-    if (_altTabActive && _activePointers.length < 3) {
-      _sendTcpCommand(TcpCommand.altTabEnd);
-      _altTabActive = false;
-    }
+    _checkGestureEnd();
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
     _activePointers.remove(event.pointer);
+    _checkGestureEnd();
+  }
+
+  void _checkGestureEnd() {
     if (_altTabActive && _activePointers.length < 3) {
       _sendTcpCommand(TcpCommand.altTabEnd);
       _altTabActive = false;
+    }
+    if (_activePointers.length < 3) {
+      _threeFingerGestureLocked = false;
+      _threeFingerDeltaX = 0.0;
+      _threeFingerDeltaY = 0.0;
+    }
+    if (_activePointers.length < 4) {
+      _fourFingerTriggered = false;
+      _fourFingerDeltaX = 0.0;
+      _fourFingerDeltaY = 0.0;
     }
   }
 

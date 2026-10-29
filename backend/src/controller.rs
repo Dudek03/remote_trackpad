@@ -13,8 +13,18 @@ pub trait InputDevice {
     fn press_alt(&mut self);
     fn release_alt(&mut self);
     fn press_tab(&mut self);
+    fn press_shift_tab(&mut self);
     fn volume_up(&mut self);
     fn volume_down(&mut self);
+    fn window_minimize(&mut self);
+    fn window_maximize(&mut self);
+    fn show_desktop(&mut self);
+    fn desktop_left(&mut self);
+    fn desktop_right(&mut self);
+    fn media_next(&mut self);
+    fn media_prev(&mut self);
+    fn browser_back(&mut self);
+    fn browser_forward(&mut self);
 }
 
 pub struct EnigoDevice {
@@ -70,12 +80,80 @@ impl InputDevice for EnigoDevice {
         let _ = self.enigo.key(Key::Tab, Direction::Click);
     }
 
+    fn press_shift_tab(&mut self) {
+        let _ = self.enigo.key(Key::Shift, Direction::Press);
+        let _ = self.enigo.key(Key::Tab, Direction::Click);
+        let _ = self.enigo.key(Key::Shift, Direction::Release);
+    }
+
     fn volume_up(&mut self) {
         let _ = self.enigo.key(Key::VolumeUp, Direction::Click);
     }
 
     fn volume_down(&mut self) {
         let _ = self.enigo.key(Key::VolumeDown, Direction::Click);
+    }
+
+    fn window_minimize(&mut self) {
+        let _ = self.enigo.key(Key::Meta, Direction::Press);
+        let _ = self.enigo.key(Key::DownArrow, Direction::Click);
+        let _ = self.enigo.key(Key::Meta, Direction::Release);
+    }
+
+    fn window_maximize(&mut self) {
+        let _ = self.enigo.key(Key::Meta, Direction::Press);
+        let _ = self.enigo.key(Key::UpArrow, Direction::Click);
+        let _ = self.enigo.key(Key::Meta, Direction::Release);
+    }
+
+    #[cfg(target_os = "windows")]
+    fn show_desktop(&mut self) {
+        let _ = self.enigo.key(Key::Meta, Direction::Press);
+        let _ = self.enigo.key(Key::D, Direction::Click);
+        let _ = self.enigo.key(Key::Meta, Direction::Release);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn show_desktop(&mut self) {
+        let _ = self.enigo.key(Key::Meta, Direction::Press);
+        let _ = self.enigo.key(Key::Unicode('d'), Direction::Click);
+        let _ = self.enigo.key(Key::Meta, Direction::Release);
+    }
+
+    fn desktop_left(&mut self) {
+        let _ = self.enigo.key(Key::Control, Direction::Press);
+        let _ = self.enigo.key(Key::Meta, Direction::Press);
+        let _ = self.enigo.key(Key::LeftArrow, Direction::Click);
+        let _ = self.enigo.key(Key::Meta, Direction::Release);
+        let _ = self.enigo.key(Key::Control, Direction::Release);
+    }
+
+    fn desktop_right(&mut self) {
+        let _ = self.enigo.key(Key::Control, Direction::Press);
+        let _ = self.enigo.key(Key::Meta, Direction::Press);
+        let _ = self.enigo.key(Key::RightArrow, Direction::Click);
+        let _ = self.enigo.key(Key::Meta, Direction::Release);
+        let _ = self.enigo.key(Key::Control, Direction::Release);
+    }
+
+    fn media_next(&mut self) {
+        let _ = self.enigo.key(Key::MediaNextTrack, Direction::Click);
+    }
+
+    fn media_prev(&mut self) {
+        let _ = self.enigo.key(Key::MediaPrevTrack, Direction::Click);
+    }
+
+    fn browser_back(&mut self) {
+        let _ = self.enigo.key(Key::Alt, Direction::Press);
+        let _ = self.enigo.key(Key::LeftArrow, Direction::Click);
+        let _ = self.enigo.key(Key::Alt, Direction::Release);
+    }
+
+    fn browser_forward(&mut self) {
+        let _ = self.enigo.key(Key::Alt, Direction::Press);
+        let _ = self.enigo.key(Key::RightArrow, Direction::Click);
+        let _ = self.enigo.key(Key::Alt, Direction::Release);
     }
 }
 
@@ -140,10 +218,19 @@ impl<T: InputDevice> AppController<T> {
             TcpCommand::LeftClick => self.device.left_click(),
             TcpCommand::RightClick => self.device.right_click(),
             TcpCommand::DoubleClick => self.device.double_click(),
-            TcpCommand::AltTabStart => {
-                self.alt_tab_active = true;
-                self.device.press_alt();
+            TcpCommand::AltTabStart | TcpCommand::AltTabNext => {
+                if !self.alt_tab_active {
+                    self.alt_tab_active = true;
+                    self.device.press_alt();
+                }
                 self.device.press_tab();
+            }
+            TcpCommand::AltTabPrev => {
+                if !self.alt_tab_active {
+                    self.alt_tab_active = true;
+                    self.device.press_alt();
+                }
+                self.device.press_shift_tab();
             }
             TcpCommand::AltTabEnd => {
                 if self.alt_tab_active {
@@ -153,6 +240,15 @@ impl<T: InputDevice> AppController<T> {
             }
             TcpCommand::VolumeUp => self.device.volume_up(),
             TcpCommand::VolumeDown => self.device.volume_down(),
+            TcpCommand::WindowMinimize => self.device.window_minimize(),
+            TcpCommand::WindowMaximize => self.device.window_maximize(),
+            TcpCommand::ShowDesktop => self.device.show_desktop(),
+            TcpCommand::DesktopLeft => self.device.desktop_left(),
+            TcpCommand::DesktopRight => self.device.desktop_right(),
+            TcpCommand::MediaNext => self.device.media_next(),
+            TcpCommand::MediaPrev => self.device.media_prev(),
+            TcpCommand::BrowserBack => self.device.browser_back(),
+            TcpCommand::BrowserForward => self.device.browser_forward(),
         }
         Ok(())
     }
