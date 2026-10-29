@@ -36,7 +36,8 @@ class SocketTransport implements Transport {
     final socket = await _getUdpSocket();
     if (socket != null) {
       try {
-        socket.send(Uint8List.fromList(data.codeUnits), InternetAddress(serverIp), udpPort);
+        socket.send(
+            Uint8List.fromList(data.codeUnits), InternetAddress(serverIp), udpPort);
       } catch (_) {}
     }
   }
@@ -52,7 +53,8 @@ class SocketTransport implements Transport {
     final completer = Completer<void>();
     _tcpConnecting = completer.future;
     try {
-      final s = await Socket.connect(serverIp, tcpPort, timeout: const Duration(seconds: 2));
+      final s = await Socket.connect(serverIp, tcpPort,
+          timeout: const Duration(seconds: 2));
       _tcpSocket = s;
       s.listen(
         (_) {},
@@ -91,7 +93,8 @@ class SocketTransport implements Transport {
 
     // Fallback: one-shot connection if persistent connection fails
     try {
-      final fallback = await Socket.connect(serverIp, tcpPort, timeout: const Duration(seconds: 2));
+      final fallback = await Socket.connect(serverIp, tcpPort,
+          timeout: const Duration(seconds: 2));
       fallback.write('$data\n');
       await fallback.flush();
       await fallback.close();
@@ -105,6 +108,12 @@ class SocketTransport implements Transport {
     _tcpSocket?.destroy();
     _tcpSocket = null;
   }
+}
+
+Transport createTransport(String serverIp, Transport? transport) {
+  if (transport != null) return transport;
+  if (serverIp.isEmpty) throw StateError('Server IP is not set');
+  return SocketTransport(serverIp);
 }
 
 class RemoteTrackpadClient {
@@ -124,10 +133,9 @@ class RemoteTrackpadClient {
   }
 
   Transport get _transport {
-    if (transport != null) return transport!;
-    if (_serverIp.isEmpty) throw StateError('Server IP is not set');
-    transport = SocketTransport(_serverIp);
-    return transport!;
+    final t = createTransport(_serverIp, transport);
+    transport = t;
+    return t;
   }
 
   Future<void> sendUdpMove(double dx, double dy) async {

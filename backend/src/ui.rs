@@ -115,6 +115,46 @@ pub fn get_local_ip() -> String {
         .unwrap_or_else(|_| "127.0.0.1".to_string())
 }
 
+pub fn parse_config_inputs(
+    udp_port_input: &str,
+    tcp_port_input: &str,
+    sensitivity_input: &str,
+) -> Option<(u16, u16, f32)> {
+    let udp_port = udp_port_input.parse::<u16>().ok()?;
+    let tcp_port = tcp_port_input.parse::<u16>().ok()?;
+    let sensitivity = sanitize_sensitivity(sensitivity_input.parse::<f32>().ok()?);
+    Some((udp_port, tcp_port, sensitivity))
+}
+
+pub fn is_tray_click(event: &TrayIconEvent) -> bool {
+    matches!(event, TrayIconEvent::Click { .. })
+}
+
+pub fn sanitize_sensitivity(sensitivity: f32) -> f32 {
+    sensitivity.clamp(0.1, 10.0)
+}
+
+pub fn apply_server_config(
+    config: &Arc<Mutex<ServerConfig>>,
+    udp_port_input: &str,
+    tcp_port_input: &str,
+    sensitivity_input: &str,
+) -> bool {
+    let Some((udp_port, tcp_port, sensitivity)) = parse_config_inputs(
+        udp_port_input,
+        tcp_port_input,
+        sensitivity_input,
+    ) else {
+        return false;
+    };
+
+    let mut cfg = config.lock().unwrap();
+    cfg.udp_port = udp_port;
+    cfg.tcp_port = tcp_port;
+    cfg.sensitivity = sensitivity;
+    true
+}
+
 pub fn run_ui(config: Arc<Mutex<ServerConfig>>, local_ip: String) -> anyhow::Result<()> {
     let mut native_options = NativeOptions::default();
     native_options.viewport = egui::ViewportBuilder::default()
@@ -222,7 +262,7 @@ impl RemoteTrackpadApp {
         let show_flag_tray = Arc::clone(&show_window);
         let ctx_tray = egui_ctx;
         TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
-            if matches!(event, TrayIconEvent::Click { .. }) {
+            if is_tray_click(&event) {
                 show_flag_tray.store(true, Ordering::SeqCst);
                 #[cfg(target_os = "windows")]
                 win32::restore_window();
@@ -300,15 +340,12 @@ impl eframe::App for RemoteTrackpadApp {
             });
             ui.add_space(8.0);
             if ui.button("Apply Settings").clicked() {
-                if let (Ok(udp_port), Ok(tcp_port), Ok(sensitivity)) = (
-                    self.udp_port_input.parse::<u16>(),
-                    self.tcp_port_input.parse::<u16>(),
-                    self.sensitivity_input.parse::<f32>(),
+                if apply_server_config(
+                    &self.config,
+                    &self.udp_port_input,
+                    &self.tcp_port_input,
+                    &self.sensitivity_input,
                 ) {
-                    let mut cfg = self.config.lock().unwrap();
-                    cfg.udp_port = udp_port;
-                    cfg.tcp_port = tcp_port;
-                    cfg.sensitivity = sensitivity.clamp(0.1, 10.0);
                     self.restart_required = true;
                 }
             }

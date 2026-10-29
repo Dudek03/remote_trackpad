@@ -7,6 +7,13 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'network.dart';
 import 'protocol.dart';
 
+const int hiddenSettingsTapThreshold = 3;
+const Duration hiddenSettingsTapResetDuration = Duration(milliseconds: 1000);
+
+int advanceTapCount(int tapCount) => tapCount + 1;
+
+bool shouldOpenSettings(int tapCount, int threshold) => tapCount >= threshold;
+
 class RemoteTrackpadApp extends StatefulWidget {
   const RemoteTrackpadApp({super.key});
 
@@ -55,9 +62,10 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   }
 
   void _handleHiddenZoneTap() {
-    _tapCount += 1;
+    final nextTapCount = advanceTapCount(_tapCount);
+    _tapCount = nextTapCount;
     _tapResetTimer?.cancel();
-    _tapResetTimer = Timer(const Duration(milliseconds: 1000), () {
+    _tapResetTimer = Timer(hiddenSettingsTapResetDuration, () {
       if (mounted) {
         setState(() {
           _tapCount = 0;
@@ -65,7 +73,7 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
       }
     });
 
-    if (_tapCount >= 3) {
+    if (shouldOpenSettings(_tapCount, hiddenSettingsTapThreshold)) {
       _tapResetTimer?.cancel();
       setState(() {
         _tapCount = 0;
@@ -75,11 +83,12 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   }
 
   Future<void> showSettingsDialog() async {
-    final context = _navigatorKey.currentContext;
-    if (context == null) return;
+    final dialogContext = _navigatorKey.currentContext;
+    if (dialogContext == null) return;
     final controller = TextEditingController(text: _serverIp);
+
     await showDialog<void>(
-      context: context,
+      context: dialogContext,
       builder: (context) {
         return AlertDialog(
           backgroundColor: Colors.white,
@@ -211,14 +220,20 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
               Positioned(
                 right: 0,
                 bottom: 0,
-                child: GestureDetector(
-                  key: const Key('hidden-settings-zone'),
-                  behavior: HitTestBehavior.opaque,
-                  onTap: _handleHiddenZoneTap,
-                  child: Container(
-                    width: 90,
-                    height: 90,
-                    color: Colors.transparent,
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: FilledButton(
+                    key: const Key('hidden-settings-zone'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: Colors.black87,
+                      minimumSize: const Size(96, 48),
+                    ),
+                    onPressed: _handleHiddenZoneTap,
+                    child: const Text(
+                      'Settings',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
                   ),
                 ),
               ),

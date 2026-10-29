@@ -80,7 +80,6 @@ jobs:
           path: artifacts/
 
   frontend-build-ios:
-    if: false
     needs: frontend-test
     runs-on: macos-latest
     steps:

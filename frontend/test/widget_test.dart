@@ -22,6 +22,18 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Connect to a server'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
     expect(find.byKey(const Key('hidden-settings-zone')), findsOneWidget);
+  });
+
+  test('advanceTapCount increments the tap counter', () {
+    expect(advanceTapCount(0), 1);
+    expect(advanceTapCount(4), 5);
+  });
+
+  test('shouldOpenSettings is true at threshold or above', () {
+    expect(shouldOpenSettings(2, 3), isFalse);
+    expect(shouldOpenSettings(3, 3), isTrue);
+    expect(shouldOpenSettings(5, 3), isTrue);
   });
 }
