@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -54,15 +55,21 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   String _fourFingerVerticalAction = 'minimize_active';
   int _tapCount = 0;
   Timer? _tapResetTimer;
-  final _activePointers = <int>{};
+
+  // Multi-touch & gesture session tracking
+  final _activePointers = <int, Offset>{};
+  int _maxPointersInSession = 0;
   bool _altTabActive = false;
   bool _threeFingerGestureLocked = false;
   bool _threeFingerIsHorizontal = false;
-  double _threeFingerDeltaX = 0.0;
-  double _threeFingerDeltaY = 0.0;
+  double _gestureDeltaX = 0.0;
+  double _gestureDeltaY = 0.0;
   bool _fourFingerTriggered = false;
-  double _fourFingerDeltaX = 0.0;
-  double _fourFingerDeltaY = 0.0;
+
+  // HUD & feedback
+  String _hudMessage = '';
+  Timer? _hudResetTimer;
+
   final _client = RemoteTrackpadClient();
   final _navigatorKey = GlobalKey<NavigatorState>();
 
@@ -76,8 +83,33 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   @override
   void dispose() {
     _tapResetTimer?.cancel();
+    _hudResetTimer?.cancel();
     _client.dispose();
     super.dispose();
+  }
+
+  void _triggerHaptic({bool isStrong = false}) {
+    try {
+      if (isStrong) {
+        HapticFeedback.mediumImpact();
+      } else {
+        HapticFeedback.selectionClick();
+      }
+    } catch (_) {}
+  }
+
+  void _setHudMessage(String msg) {
+    _hudResetTimer?.cancel();
+    setState(() {
+      _hudMessage = msg;
+    });
+    _hudResetTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (mounted) {
+        setState(() {
+          _hudMessage = '';
+        });
+      }
+    });
   }
 
   Future<void> _loadSettings() async {
@@ -262,106 +294,134 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   }
 
   void _onPointerDown(PointerDownEvent event) {
-    _activePointers.add(event.pointer);
-    if (_activePointers.length == 3) {
-      _threeFingerGestureLocked = false;
-      _threeFingerIsHorizontal = false;
-      _threeFingerDeltaX = 0.0;
-      _threeFingerDeltaY = 0.0;
-    } else if (_activePointers.length == 4) {
-      _fourFingerTriggered = false;
-      _fourFingerDeltaX = 0.0;
-      _fourFingerDeltaY = 0.0;
+    _activePointers[event.pointer] = event.position;
+    if (_activePointers.length > _maxPointersInSession) {
+      _maxPointersInSession = _activePointers.length;
     }
+    setState(() {});
   }
 
   void _onPointerMove(PointerMoveEvent event) {
-    final count = _activePointers.length;
-    if (count == 1) {
-      _sendUdpMove(event.delta.dx, event.delta.dy);
-    } else if (count == 2) {
-      if (_activePointers.isNotEmpty && event.pointer == _activePointers.first) {
+    _activePointers[event.pointer] = event.position;
+    if (_activePointers.length > _maxPointersInSession) {
+      _maxPointersInSession = _activePointers.length;
+    }
+
+    // Determine action based on highest pointer count seen in this gesture session
+    if (_maxPointersInSession >= 4) {
+      // 4-finger gesture
+      final pointerCount = _activePointers.length.clamp(1, 4);
+      _gestureDeltaX += event.delta.dx / pointerCount;
+      _gestureDeltaY += event.delta.dy / pointerCount;
+
+      if (!_fourFingerTriggered) {
+        const threshold = 12.0;
+        if (_gestureDeltaX.abs() >= threshold ||
+            _gestureDeltaY.abs() >= threshold) {
+          _fourFingerTriggered = true;
+          _triggerHaptic(isStrong: true);
+
+          if (!isHorizontalSwipe(_gestureDeltaX, _gestureDeltaY)) {
+            // Vertical: minimize / maximize
+            final cmd = getFourFingerVerticalCommand(
+                _gestureDeltaY, _fourFingerVerticalAction);
+            _sendTcpCommand(cmd);
+            _setHudMessage(
+                _gestureDeltaY > 0 ? '4 palce: Minimalizacja' : '4 palce: Maksymalizacja');
+          } else {
+            // Horizontal
+            final isRight = _gestureDeltaX > 0;
+            final cmd = getFourFingerHorizontalCommand(
+                isRight, _fourFingerHorizontalAction);
+            _sendTcpCommand(cmd);
+            _setHudMessage(
+                '4 palce: ${isRight ? 'Pulpit w prawo' : 'Pulpit w lewo'}');
+          }
+        }
+      }
+    } else if (_maxPointersInSession == 3) {
+      // 3-finger gesture
+      final pointerCount = _activePointers.length.clamp(1, 3);
+      _gestureDeltaX += event.delta.dx / pointerCount;
+      _gestureDeltaY += event.delta.dy / pointerCount;
+
+      if (!_threeFingerGestureLocked) {
+        const threshold = 10.0;
+        if (_gestureDeltaX.abs() >= threshold ||
+            _gestureDeltaY.abs() >= threshold) {
+          _threeFingerGestureLocked = true;
+          _triggerHaptic();
+
+          if (isHorizontalSwipe(_gestureDeltaX, _gestureDeltaY)) {
+            _threeFingerIsHorizontal = true;
+            _altTabActive = true;
+            final cmd = getThreeFingerHorizontalCommand(_gestureDeltaX);
+            _sendTcpCommand(cmd);
+            _setHudMessage(
+                '3 palce: Alt+Tab ${_gestureDeltaX > 0 ? 'Dalej' : 'Wstecz'}');
+            _gestureDeltaX = 0.0;
+          } else {
+            _threeFingerIsHorizontal = false;
+            final cmd = getThreeFingerVerticalCommand(_gestureDeltaY);
+            _sendTcpCommand(cmd);
+            _setHudMessage(
+                '3 palce: ${_gestureDeltaY <= 0 ? 'Głośniej +' : 'Ciszej -'}');
+            _gestureDeltaY = 0.0;
+          }
+        }
+      } else {
+        if (_threeFingerIsHorizontal) {
+          const step = 20.0;
+          if (_gestureDeltaX >= step) {
+            _sendTcpCommand(TcpCommand.altTabNext);
+            _triggerHaptic();
+            _setHudMessage('3 palce: Alt+Tab Dalej');
+            _gestureDeltaX = 0.0;
+          } else if (_gestureDeltaX <= -step) {
+            _sendTcpCommand(TcpCommand.altTabPrev);
+            _triggerHaptic();
+            _setHudMessage('3 palce: Alt+Tab Wstecz');
+            _gestureDeltaX = 0.0;
+          }
+        } else {
+          const step = 12.0;
+          if (_gestureDeltaY <= -step) {
+            _sendTcpCommand(TcpCommand.volumeUp);
+            _triggerHaptic();
+            _setHudMessage('3 palce: Głośniej +');
+            _gestureDeltaY = 0.0;
+          } else if (_gestureDeltaY >= step) {
+            _sendTcpCommand(TcpCommand.volumeDown);
+            _triggerHaptic();
+            _setHudMessage('3 palce: Ciszej -');
+            _gestureDeltaY = 0.0;
+          }
+        }
+      }
+    } else if (_maxPointersInSession == 2) {
+      // 2-finger scroll
+      if (_activePointers.isNotEmpty &&
+          event.pointer == _activePointers.keys.first) {
         if (event.delta.dy.abs() >= 0.5) {
           _sendUdpScroll(0, event.delta.dy);
         }
       }
-    } else if (count == 3) {
-      if (_activePointers.isNotEmpty && event.pointer == _activePointers.first) {
-        if (!_threeFingerGestureLocked) {
-          _threeFingerDeltaX += event.delta.dx;
-          _threeFingerDeltaY += event.delta.dy;
-
-          const threshold = 12.0;
-          if (_threeFingerDeltaX.abs() >= threshold ||
-              _threeFingerDeltaY.abs() >= threshold) {
-            _threeFingerGestureLocked = true;
-            if (isHorizontalSwipe(_threeFingerDeltaX, _threeFingerDeltaY)) {
-              _threeFingerIsHorizontal = true;
-              _altTabActive = true;
-              _sendTcpCommand(
-                  getThreeFingerHorizontalCommand(_threeFingerDeltaX));
-              _threeFingerDeltaX = 0.0;
-            } else {
-              _threeFingerIsHorizontal = false;
-              _sendTcpCommand(getThreeFingerVerticalCommand(_threeFingerDeltaY));
-              _threeFingerDeltaY = 0.0;
-            }
-          }
-        } else {
-          if (_threeFingerIsHorizontal) {
-            _threeFingerDeltaX += event.delta.dx;
-            const step = 25.0;
-            if (_threeFingerDeltaX >= step) {
-              _sendTcpCommand(TcpCommand.altTabNext);
-              _threeFingerDeltaX = 0.0;
-            } else if (_threeFingerDeltaX <= -step) {
-              _sendTcpCommand(TcpCommand.altTabPrev);
-              _threeFingerDeltaX = 0.0;
-            }
-          } else {
-            _threeFingerDeltaY += event.delta.dy;
-            const step = 15.0;
-            if (_threeFingerDeltaY <= -step) {
-              _sendTcpCommand(TcpCommand.volumeUp);
-              _threeFingerDeltaY = 0.0;
-            } else if (_threeFingerDeltaY >= step) {
-              _sendTcpCommand(TcpCommand.volumeDown);
-              _threeFingerDeltaY = 0.0;
-            }
-          }
-        }
-      }
-    } else if (count == 4) {
-      if (_activePointers.isNotEmpty && event.pointer == _activePointers.first) {
-        if (!_fourFingerTriggered) {
-          _fourFingerDeltaX += event.delta.dx;
-          _fourFingerDeltaY += event.delta.dy;
-
-          const threshold = 16.0;
-          if (_fourFingerDeltaX.abs() >= threshold ||
-              _fourFingerDeltaY.abs() >= threshold) {
-            _fourFingerTriggered = true;
-            if (!isHorizontalSwipe(_fourFingerDeltaX, _fourFingerDeltaY)) {
-              _sendTcpCommand(getFourFingerVerticalCommand(
-                  _fourFingerDeltaY, _fourFingerVerticalAction));
-            } else {
-              _sendTcpCommand(getFourFingerHorizontalCommand(
-                  _fourFingerDeltaX > 0, _fourFingerHorizontalAction));
-            }
-          }
-        }
-      }
+    } else if (_maxPointersInSession == 1) {
+      // 1-finger move
+      _sendUdpMove(event.delta.dx, event.delta.dy);
     }
   }
 
   void _onPointerUp(PointerUpEvent event) {
     _activePointers.remove(event.pointer);
     _checkGestureEnd();
+    setState(() {});
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
     _activePointers.remove(event.pointer);
     _checkGestureEnd();
+    setState(() {});
   }
 
   void _checkGestureEnd() {
@@ -369,20 +429,21 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
       _sendTcpCommand(TcpCommand.altTabEnd);
       _altTabActive = false;
     }
-    if (_activePointers.length < 3) {
+
+    if (_activePointers.isEmpty) {
+      _maxPointersInSession = 0;
       _threeFingerGestureLocked = false;
-      _threeFingerDeltaX = 0.0;
-      _threeFingerDeltaY = 0.0;
-    }
-    if (_activePointers.length < 4) {
+      _threeFingerIsHorizontal = false;
       _fourFingerTriggered = false;
-      _fourFingerDeltaX = 0.0;
-      _fourFingerDeltaY = 0.0;
+      _gestureDeltaX = 0.0;
+      _gestureDeltaY = 0.0;
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final activeTouches = _activePointers.length;
+
     return MaterialApp(
       navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
@@ -398,14 +459,74 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
               Positioned.fill(
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onTap: () => _sendTcpCommand(TcpCommand.leftClick),
-                  onDoubleTap: () => _sendTcpCommand(TcpCommand.rightClick),
+                  onTap: () {
+                    // Only click if it was purely a 1-finger interaction
+                    if (_maxPointersInSession <= 1) {
+                      _sendTcpCommand(TcpCommand.leftClick);
+                    }
+                  },
+                  onDoubleTap: () {
+                    if (_maxPointersInSession <= 1) {
+                      _sendTcpCommand(TcpCommand.rightClick);
+                    }
+                  },
                   child: Center(
-                    child: Text(
-                      _serverIp.isEmpty
-                          ? 'Connect to a server'
-                          : 'Connected to $_serverIp',
-                      style: const TextStyle(color: Colors.white),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _serverIp.isEmpty
+                              ? 'Connect to a server'
+                              : 'Connected to $_serverIp',
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 16),
+                        ),
+                        if (_hudMessage.isNotEmpty) ...[
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.blueAccent.withValues(alpha: 0.3),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: Colors.blueAccent),
+                            ),
+                            child: Text(
+                              _hudMessage,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              // Pointer count indicator at top
+              Positioned(
+                top: 40,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: AnimatedOpacity(
+                    opacity: activeTouches > 0 ? 0.9 : 0.0,
+                    duration: const Duration(milliseconds: 150),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white12,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        'Dotknięć: $activeTouches',
+                        style: const TextStyle(
+                            color: Colors.white70, fontSize: 12),
+                      ),
                     ),
                   ),
                 ),

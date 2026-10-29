@@ -1,4 +1,6 @@
 use std::sync::{Arc, Mutex};
+use std::thread::sleep;
+use std::time::Duration;
 
 use crate::protocol::{parse_tcp_payload, parse_udp_payload, TcpCommand, UdpPacket};
 use crate::ui::ServerConfig;
@@ -65,6 +67,7 @@ impl InputDevice for EnigoDevice {
 
     fn double_click(&mut self) {
         let _ = self.enigo.button(Button::Left, Direction::Click);
+        sleep(Duration::from_millis(10));
         let _ = self.enigo.button(Button::Left, Direction::Click);
     }
 
@@ -82,7 +85,9 @@ impl InputDevice for EnigoDevice {
 
     fn press_shift_tab(&mut self) {
         let _ = self.enigo.key(Key::Shift, Direction::Press);
+        sleep(Duration::from_millis(10));
         let _ = self.enigo.key(Key::Tab, Direction::Click);
+        sleep(Duration::from_millis(10));
         let _ = self.enigo.key(Key::Shift, Direction::Release);
     }
 
@@ -96,34 +101,46 @@ impl InputDevice for EnigoDevice {
 
     fn window_minimize(&mut self) {
         let _ = self.enigo.key(Key::Meta, Direction::Press);
+        sleep(Duration::from_millis(15));
         let _ = self.enigo.key(Key::DownArrow, Direction::Click);
+        sleep(Duration::from_millis(20));
+        let _ = self.enigo.key(Key::DownArrow, Direction::Click);
+        sleep(Duration::from_millis(15));
         let _ = self.enigo.key(Key::Meta, Direction::Release);
     }
 
     fn window_maximize(&mut self) {
         let _ = self.enigo.key(Key::Meta, Direction::Press);
+        sleep(Duration::from_millis(15));
         let _ = self.enigo.key(Key::UpArrow, Direction::Click);
+        sleep(Duration::from_millis(15));
         let _ = self.enigo.key(Key::Meta, Direction::Release);
     }
 
     #[cfg(target_os = "windows")]
     fn show_desktop(&mut self) {
         let _ = self.enigo.key(Key::Meta, Direction::Press);
+        sleep(Duration::from_millis(15));
         let _ = self.enigo.key(Key::D, Direction::Click);
+        sleep(Duration::from_millis(15));
         let _ = self.enigo.key(Key::Meta, Direction::Release);
     }
 
     #[cfg(not(target_os = "windows"))]
     fn show_desktop(&mut self) {
         let _ = self.enigo.key(Key::Meta, Direction::Press);
+        sleep(Duration::from_millis(15));
         let _ = self.enigo.key(Key::Unicode('d'), Direction::Click);
+        sleep(Duration::from_millis(15));
         let _ = self.enigo.key(Key::Meta, Direction::Release);
     }
 
     fn desktop_left(&mut self) {
         let _ = self.enigo.key(Key::Control, Direction::Press);
         let _ = self.enigo.key(Key::Meta, Direction::Press);
+        sleep(Duration::from_millis(15));
         let _ = self.enigo.key(Key::LeftArrow, Direction::Click);
+        sleep(Duration::from_millis(15));
         let _ = self.enigo.key(Key::Meta, Direction::Release);
         let _ = self.enigo.key(Key::Control, Direction::Release);
     }
@@ -131,7 +148,9 @@ impl InputDevice for EnigoDevice {
     fn desktop_right(&mut self) {
         let _ = self.enigo.key(Key::Control, Direction::Press);
         let _ = self.enigo.key(Key::Meta, Direction::Press);
+        sleep(Duration::from_millis(15));
         let _ = self.enigo.key(Key::RightArrow, Direction::Click);
+        sleep(Duration::from_millis(15));
         let _ = self.enigo.key(Key::Meta, Direction::Release);
         let _ = self.enigo.key(Key::Control, Direction::Release);
     }
@@ -146,13 +165,17 @@ impl InputDevice for EnigoDevice {
 
     fn browser_back(&mut self) {
         let _ = self.enigo.key(Key::Alt, Direction::Press);
+        sleep(Duration::from_millis(10));
         let _ = self.enigo.key(Key::LeftArrow, Direction::Click);
+        sleep(Duration::from_millis(10));
         let _ = self.enigo.key(Key::Alt, Direction::Release);
     }
 
     fn browser_forward(&mut self) {
         let _ = self.enigo.key(Key::Alt, Direction::Press);
+        sleep(Duration::from_millis(10));
         let _ = self.enigo.key(Key::RightArrow, Direction::Click);
+        sleep(Duration::from_millis(10));
         let _ = self.enigo.key(Key::Alt, Direction::Release);
     }
 }
@@ -222,6 +245,7 @@ impl<T: InputDevice> AppController<T> {
                 if !self.alt_tab_active {
                     self.alt_tab_active = true;
                     self.device.press_alt();
+                    sleep(Duration::from_millis(15));
                 }
                 self.device.press_tab();
             }
@@ -229,6 +253,7 @@ impl<T: InputDevice> AppController<T> {
                 if !self.alt_tab_active {
                     self.alt_tab_active = true;
                     self.device.press_alt();
+                    sleep(Duration::from_millis(15));
                 }
                 self.device.press_shift_tab();
             }
