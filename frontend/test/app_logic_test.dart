@@ -30,7 +30,7 @@ void main() {
     expect(isAnchorTrigger(anchorMovement: 15.0, moverMovement: 18.0), isFalse);
 
     // anchor moved too much
-    expect(isAnchorTrigger(anchorMovement: 25.0, moverMovement: 50.0), isFalse);
+    expect(isAnchorTrigger(anchorMovement: 30.0, moverMovement: 50.0), isFalse);
   });
 
   test('anchor horizontal commands map to Alt-Tab next/prev', () {

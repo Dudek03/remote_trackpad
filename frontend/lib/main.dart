@@ -21,7 +21,7 @@ bool isAnchorTrigger({
   required double anchorMovement,
   required double moverMovement,
 }) {
-  return anchorMovement <= 20.0 && (moverMovement - anchorMovement) >= 14.0;
+  return anchorMovement <= 25.0 && (moverMovement - anchorMovement) >= 12.0;
 }
 
 TcpCommand getAnchorHorizontalCommand(double dx) =>
@@ -72,7 +72,7 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   // Multi-touch tracking
   final _activePointers = <int, Offset>{};
   final _pointerDownPos = <int, Offset>{};
-  final _pointerMovementDist = <int, double>{};
+  final _twoPointerBaselines = <int, Offset>{};
   int _maxPointersInSession = 0;
 
   // Anchor (kotwica: 1 hold + 1 move) gesture state
@@ -341,18 +341,28 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   void _onPointerDown(PointerDownEvent event) {
     _activePointers[event.pointer] = event.position;
     _pointerDownPos[event.pointer] = event.position;
-    _pointerMovementDist[event.pointer] = 0.0;
 
     if (_activePointers.length > _maxPointersInSession) {
       _maxPointersInSession = _activePointers.length;
     }
+
+    if (_activePointers.length == 2) {
+      // Establish baseline positions for the 2-pointer interaction
+      _twoPointerBaselines.clear();
+      for (final entry in _activePointers.entries) {
+        _twoPointerBaselines[entry.key] = entry.value;
+      }
+      _anchorGestureLocked = false;
+      _scrollGestureLocked = false;
+      _anchorPointerId = null;
+      _moverPointerId = null;
+    }
+
     setState(() {});
   }
 
   void _onPointerMove(PointerMoveEvent event) {
     _activePointers[event.pointer] = event.position;
-    _pointerMovementDist[event.pointer] =
-        (_pointerMovementDist[event.pointer] ?? 0.0) + event.delta.distance;
 
     if (_activePointers.length > _maxPointersInSession) {
       _maxPointersInSession = _activePointers.length;
@@ -452,8 +462,13 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
       final keys = _activePointers.keys.toList();
       final id1 = keys[0];
       final id2 = keys[1];
-      final dist1 = _pointerMovementDist[id1] ?? 0.0;
-      final dist2 = _pointerMovementDist[id2] ?? 0.0;
+
+      final base1 = _twoPointerBaselines[id1] ?? _activePointers[id1]!;
+      final base2 = _twoPointerBaselines[id2] ?? _activePointers[id2]!;
+
+      // Euclidean displacement from the moment 2 pointers were active
+      final dist1 = (_activePointers[id1]! - base1).distance;
+      final dist2 = (_activePointers[id2]! - base2).distance;
 
       if (!_anchorGestureLocked && !_scrollGestureLocked) {
         int? anchorId;
@@ -472,9 +487,9 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
           _anchorPointerId = anchorId;
           _moverPointerId = moverId;
 
-          final downPos = _pointerDownPos[moverId] ?? _activePointers[moverId]!;
-          final currentPos = _activePointers[moverId]!;
-          final totalDelta = currentPos - downPos;
+          final moverBase = _twoPointerBaselines[moverId] ?? _activePointers[moverId]!;
+          final moverCur = _activePointers[moverId]!;
+          final totalDelta = moverCur - moverBase;
 
           _triggerHaptic();
 
@@ -494,7 +509,7 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
                 'Kotwica: ${totalDelta.dy <= 0 ? 'Głośniej +' : 'Ciszej -'}');
             _anchorStepAccumY = 0.0;
           }
-        } else if (dist1 >= 10.0 && dist2 >= 10.0) {
+        } else if (dist1 >= 15.0 && dist2 >= 15.0) {
           _scrollGestureLocked = true;
         }
       }
@@ -569,12 +584,12 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
       _anchorStepAccumX = 0.0;
       _anchorStepAccumY = 0.0;
       _scrollGestureLocked = false;
+      _twoPointerBaselines.clear();
     }
 
     if (_activePointers.isEmpty) {
       _maxPointersInSession = 0;
       _pointerDownPos.clear();
-      _pointerMovementDist.clear();
       _threeFingerGestureLocked = false;
       _threeFingerIsHorizontal = false;
       _fourFingerTriggered = false;
@@ -617,12 +632,48 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(
-                          _serverIp.isEmpty
-                              ? 'Connect to a server'
-                              : 'Connected to $_serverIp',
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 16),
+                        Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 24),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 20, vertical: 16),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white12),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _serverIp.isEmpty
+                                    ? 'Connect to a server'
+                                    : 'Connected to $_serverIp',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              const Divider(color: Colors.white24, height: 1),
+                              const SizedBox(height: 12),
+                              const Text(
+                                '📋 Ściąga z gestów:\n'
+                                '• 1 palec: Mysz (ruch, tap = LPM, 2x tap = PPM)\n'
+                                '• 2 palce: Przewijanie (Scroll)\n'
+                                '• ⚓ Kotwica (trzymaj 1 palec + ruch 2.):\n'
+                                '    ↔ w boki: Alt + Tab (wybór okna)\n'
+                                '    ↕ góra/dół: Głośność komputera\n'
+                                '• 4 palce: Minimalizacja / Pulpity',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 13,
+                                  height: 1.45,
+                                ),
+                                textAlign: TextAlign.left,
+                              ),
+                            ],
+                          ),
                         ),
                         if (_hudMessage.isNotEmpty) ...[
                           const SizedBox(height: 16),
@@ -674,6 +725,25 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
                   ),
                 ),
               ),
+              // Help button in bottom-left
+              Positioned(
+                left: 0,
+                bottom: 0,
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: TextButton.icon(
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.white70,
+                      backgroundColor: Colors.white12,
+                      minimumSize: const Size(96, 48),
+                    ),
+                    onPressed: showSettingsDialog,
+                    icon: const Icon(Icons.help_outline, size: 18),
+                    label: const Text('Gesty / IP'),
+                  ),
+                ),
+              ),
+              // Hidden settings zone button in bottom-right (3 taps)
               Positioned(
                 right: 0,
                 bottom: 0,
