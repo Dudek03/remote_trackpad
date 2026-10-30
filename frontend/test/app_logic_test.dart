@@ -21,6 +21,28 @@ void main() {
     expect(isHorizontalSwipe(-2.0, -15.0), isFalse);
   });
 
+  test('anchor trigger detection', () {
+    // stationary anchor + moving finger
+    expect(isAnchorTrigger(anchorMovement: 2.0, moverMovement: 18.0), isTrue);
+    expect(isAnchorTrigger(anchorMovement: 5.0, moverMovement: 25.0), isTrue);
+
+    // both moving together (regular scroll)
+    expect(isAnchorTrigger(anchorMovement: 15.0, moverMovement: 18.0), isFalse);
+
+    // anchor moved too much
+    expect(isAnchorTrigger(anchorMovement: 25.0, moverMovement: 50.0), isFalse);
+  });
+
+  test('anchor horizontal commands map to Alt-Tab next/prev', () {
+    expect(getAnchorHorizontalCommand(15.0), TcpCommand.altTabNext);
+    expect(getAnchorHorizontalCommand(-15.0), TcpCommand.altTabPrev);
+  });
+
+  test('anchor vertical commands map to Volume Up/Down', () {
+    expect(getAnchorVerticalCommand(-10.0), TcpCommand.volumeUp);
+    expect(getAnchorVerticalCommand(10.0), TcpCommand.volumeDown);
+  });
+
   test('three-finger horizontal commands map to Alt-Tab next/prev', () {
     expect(getThreeFingerHorizontalCommand(15.0), TcpCommand.altTabNext);
     expect(getThreeFingerHorizontalCommand(-15.0), TcpCommand.altTabPrev);

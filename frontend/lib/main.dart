@@ -17,6 +17,19 @@ bool shouldOpenSettings(int tapCount, int threshold) => tapCount >= threshold;
 
 bool isHorizontalSwipe(double dx, double dy) => dx.abs() >= dy.abs();
 
+bool isAnchorTrigger({
+  required double anchorMovement,
+  required double moverMovement,
+}) {
+  return anchorMovement <= 20.0 && (moverMovement - anchorMovement) >= 14.0;
+}
+
+TcpCommand getAnchorHorizontalCommand(double dx) =>
+    dx > 0 ? TcpCommand.altTabNext : TcpCommand.altTabPrev;
+
+TcpCommand getAnchorVerticalCommand(double dy) =>
+    dy <= 0 ? TcpCommand.volumeUp : TcpCommand.volumeDown;
+
 TcpCommand getThreeFingerHorizontalCommand(double dx) =>
     dx > 0 ? TcpCommand.altTabNext : TcpCommand.altTabPrev;
 
@@ -56,15 +69,32 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   int _tapCount = 0;
   Timer? _tapResetTimer;
 
-  // Multi-touch & gesture session tracking
+  // Multi-touch tracking
   final _activePointers = <int, Offset>{};
+  final _pointerDownPos = <int, Offset>{};
+  final _pointerMovementDist = <int, double>{};
   int _maxPointersInSession = 0;
-  bool _altTabActive = false;
+
+  // Anchor (kotwica: 1 hold + 1 move) gesture state
+  bool _anchorGestureLocked = false;
+  int? _anchorPointerId;
+  int? _moverPointerId;
+  bool _anchorIsHorizontal = false;
+  double _anchorStepAccumX = 0.0;
+  double _anchorStepAccumY = 0.0;
+  bool _scrollGestureLocked = false;
+
+  // 3-finger gesture state (fallback)
   bool _threeFingerGestureLocked = false;
   bool _threeFingerIsHorizontal = false;
   double _gestureDeltaX = 0.0;
   double _gestureDeltaY = 0.0;
+
+  // 4-finger gesture state
   bool _fourFingerTriggered = false;
+
+  // Alt-Tab state
+  bool _altTabActive = false;
 
   // HUD & feedback
   String _hudMessage = '';
@@ -251,6 +281,21 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
                         }
                       },
                     ),
+                    const SizedBox(height: 20),
+                    const Divider(),
+                    const Text('Ściąga z gestów:',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 13)),
+                    const SizedBox(height: 6),
+                    const Text(
+                      '• 1 palec: Mysz (ruch, tap = LPM, 2x tap = PPM)\n'
+                      '• 2 palce: Przewijanie (Scroll)\n'
+                      '• Kotwica (1 palec przytrzymaj + 2. przesuń):\n'
+                      '    ↔ w boki: Alt + Tab (wybór okna)\n'
+                      '    ↕ góra / dół: Głośność\n'
+                      '• 4 palce: Zarządzanie oknami i pulpitami',
+                      style: TextStyle(fontSize: 12, color: Colors.black87),
+                    ),
                   ],
                 ),
               ),
@@ -295,6 +340,9 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
 
   void _onPointerDown(PointerDownEvent event) {
     _activePointers[event.pointer] = event.position;
+    _pointerDownPos[event.pointer] = event.position;
+    _pointerMovementDist[event.pointer] = 0.0;
+
     if (_activePointers.length > _maxPointersInSession) {
       _maxPointersInSession = _activePointers.length;
     }
@@ -303,13 +351,15 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
 
   void _onPointerMove(PointerMoveEvent event) {
     _activePointers[event.pointer] = event.position;
+    _pointerMovementDist[event.pointer] =
+        (_pointerMovementDist[event.pointer] ?? 0.0) + event.delta.distance;
+
     if (_activePointers.length > _maxPointersInSession) {
       _maxPointersInSession = _activePointers.length;
     }
 
-    // Determine action based on highest pointer count seen in this gesture session
     if (_maxPointersInSession >= 4) {
-      // 4-finger gesture
+      // 4-finger gestures
       final pointerCount = _activePointers.length.clamp(1, 4);
       _gestureDeltaX += event.delta.dx / pointerCount;
       _gestureDeltaY += event.delta.dy / pointerCount;
@@ -322,14 +372,13 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
           _triggerHaptic(isStrong: true);
 
           if (!isHorizontalSwipe(_gestureDeltaX, _gestureDeltaY)) {
-            // Vertical: minimize / maximize
             final cmd = getFourFingerVerticalCommand(
                 _gestureDeltaY, _fourFingerVerticalAction);
             _sendTcpCommand(cmd);
-            _setHudMessage(
-                _gestureDeltaY > 0 ? '4 palce: Minimalizacja' : '4 palce: Maksymalizacja');
+            _setHudMessage(_gestureDeltaY > 0
+                ? '4 palce: Minimalizacja'
+                : '4 palce: Maksymalizacja');
           } else {
-            // Horizontal
             final isRight = _gestureDeltaX > 0;
             final cmd = getFourFingerHorizontalCommand(
                 isRight, _fourFingerHorizontalAction);
@@ -340,7 +389,7 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
         }
       }
     } else if (_maxPointersInSession == 3) {
-      // 3-finger gesture
+      // 3-finger gestures (fallback)
       final pointerCount = _activePointers.length.clamp(1, 3);
       _gestureDeltaX += event.delta.dx / pointerCount;
       _gestureDeltaY += event.delta.dy / pointerCount;
@@ -398,12 +447,95 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
           }
         }
       }
-    } else if (_maxPointersInSession == 2) {
-      // 2-finger scroll
-      if (_activePointers.isNotEmpty &&
-          event.pointer == _activePointers.keys.first) {
-        if (event.delta.dy.abs() >= 0.5) {
-          _sendUdpScroll(0, event.delta.dy);
+    } else if (_maxPointersInSession == 2 && _activePointers.length == 2) {
+      // 2-finger: Anchor gesture OR Scroll
+      final keys = _activePointers.keys.toList();
+      final id1 = keys[0];
+      final id2 = keys[1];
+      final dist1 = _pointerMovementDist[id1] ?? 0.0;
+      final dist2 = _pointerMovementDist[id2] ?? 0.0;
+
+      if (!_anchorGestureLocked && !_scrollGestureLocked) {
+        int? anchorId;
+        int? moverId;
+
+        if (isAnchorTrigger(anchorMovement: dist1, moverMovement: dist2)) {
+          anchorId = id1;
+          moverId = id2;
+        } else if (isAnchorTrigger(anchorMovement: dist2, moverMovement: dist1)) {
+          anchorId = id2;
+          moverId = id1;
+        }
+
+        if (anchorId != null && moverId != null) {
+          _anchorGestureLocked = true;
+          _anchorPointerId = anchorId;
+          _moverPointerId = moverId;
+
+          final downPos = _pointerDownPos[moverId] ?? _activePointers[moverId]!;
+          final currentPos = _activePointers[moverId]!;
+          final totalDelta = currentPos - downPos;
+
+          _triggerHaptic();
+
+          if (isHorizontalSwipe(totalDelta.dx, totalDelta.dy)) {
+            _anchorIsHorizontal = true;
+            _altTabActive = true;
+            final cmd = getAnchorHorizontalCommand(totalDelta.dx);
+            _sendTcpCommand(cmd);
+            _setHudMessage(
+                'Kotwica: Alt+Tab ${totalDelta.dx > 0 ? 'Dalej' : 'Wstecz'}');
+            _anchorStepAccumX = 0.0;
+          } else {
+            _anchorIsHorizontal = false;
+            final cmd = getAnchorVerticalCommand(totalDelta.dy);
+            _sendTcpCommand(cmd);
+            _setHudMessage(
+                'Kotwica: ${totalDelta.dy <= 0 ? 'Głośniej +' : 'Ciszej -'}');
+            _anchorStepAccumY = 0.0;
+          }
+        } else if (dist1 >= 10.0 && dist2 >= 10.0) {
+          _scrollGestureLocked = true;
+        }
+      }
+
+      if (_anchorGestureLocked) {
+        if (event.pointer == _moverPointerId) {
+          if (_anchorIsHorizontal) {
+            _anchorStepAccumX += event.delta.dx;
+            const step = 20.0;
+            if (_anchorStepAccumX >= step) {
+              _sendTcpCommand(TcpCommand.altTabNext);
+              _triggerHaptic();
+              _setHudMessage('Kotwica: Alt+Tab Dalej');
+              _anchorStepAccumX = 0.0;
+            } else if (_anchorStepAccumX <= -step) {
+              _sendTcpCommand(TcpCommand.altTabPrev);
+              _triggerHaptic();
+              _setHudMessage('Kotwica: Alt+Tab Wstecz');
+              _anchorStepAccumX = 0.0;
+            }
+          } else {
+            _anchorStepAccumY += event.delta.dy;
+            const step = 14.0;
+            if (_anchorStepAccumY <= -step) {
+              _sendTcpCommand(TcpCommand.volumeUp);
+              _triggerHaptic();
+              _setHudMessage('Kotwica: Głośniej +');
+              _anchorStepAccumY = 0.0;
+            } else if (_anchorStepAccumY >= step) {
+              _sendTcpCommand(TcpCommand.volumeDown);
+              _triggerHaptic();
+              _setHudMessage('Kotwica: Ciszej -');
+              _anchorStepAccumY = 0.0;
+            }
+          }
+        }
+      } else if (_scrollGestureLocked) {
+        if (event.pointer == _activePointers.keys.first) {
+          if (event.delta.dy.abs() >= 0.5) {
+            _sendUdpScroll(0, event.delta.dy);
+          }
         }
       }
     } else if (_maxPointersInSession == 1) {
@@ -425,13 +557,24 @@ class _RemoteTrackpadAppState extends State<RemoteTrackpadApp> {
   }
 
   void _checkGestureEnd() {
-    if (_altTabActive && _activePointers.length < 3) {
+    if (_altTabActive && _activePointers.length < 2) {
       _sendTcpCommand(TcpCommand.altTabEnd);
       _altTabActive = false;
     }
 
+    if (_activePointers.length < 2) {
+      _anchorGestureLocked = false;
+      _anchorPointerId = null;
+      _moverPointerId = null;
+      _anchorStepAccumX = 0.0;
+      _anchorStepAccumY = 0.0;
+      _scrollGestureLocked = false;
+    }
+
     if (_activePointers.isEmpty) {
       _maxPointersInSession = 0;
+      _pointerDownPos.clear();
+      _pointerMovementDist.clear();
       _threeFingerGestureLocked = false;
       _threeFingerIsHorizontal = false;
       _fourFingerTriggered = false;
